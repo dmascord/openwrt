@@ -1,0 +1,427 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+/dts-v1/;
+
+/include/ "fsl/p2020si-pre.dtsi"
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+
+/ {
+	model = "WatchGuard XTM 330";
+	compatible = "fsl,P2020RDB";
+
+	aliases {
+		ethernet0 = &enet0;
+		ethernet1 = &enet1;
+		ethernet2 = &enet2;
+		serial0 = &serial0;
+		serial1 = &serial1;
+		pci0 = &pci0;
+		pci1 = &pci1;
+	};
+
+	memory {
+		device_type = "memory";
+	};
+
+	lbc: localbus@ffe05000 {
+		reg = <0 0xffe05000 0 0x1000>;
+
+		/* NOR and NAND Flashes */
+		ranges = <0x00 0x00 0x00 0xefe00000 0x200000 0x01 0x00 0x00 
+			0xffa00000 0x40000>;
+
+		nor@0,0 {
+			#address-cells = <0x01>;
+			#size-cells = <0x01>;
+			
+			compatible = "cfi-flash";
+			reg = <0x00 0x00 0x200000>;
+			bank-width = <0x02>;
+			device-width = <0x01>;
+
+			partition@00000000 {
+				reg = <0x00 0x20000>;
+				label = "NOR (RW) WG CFG0";
+			};
+
+			partition@00020000 {
+				reg = <0x20000 0x10000>;
+				label = "NOR (RW) WG CFG1";
+			};
+
+			partition@00030000 {
+				reg = <0x30000 0x10000>;
+				label = "NOR (RW) WG MFG DATA";
+			};
+
+			partition@00040000 {
+				reg = <0x40000 0xb0000>;
+				label = "NOR (RW) WG bootOpt Data & reserved";
+			};
+
+			partition@000F0000 {
+				reg = <0xf0000 0x10000>;
+				label = "NOR (RW) WG U-Boot ENV";
+			};
+
+			partition@00100000 {
+				reg = <0x100000 0x80000>;
+				label = "NOR (RW) WG U-Boot Image";
+			};
+
+			partition@00180000 {
+				reg = <0x180000 0x80000>;
+				label = "NOR (RW) WG U-Boot FAILSAFE";
+			};
+		};
+
+		nand@1,0 {
+			#address-cells = <0x01>;
+			#size-cells = <0x01>;
+			compatible = "fsl,p2020-fcm-nand\0fsl,elbc-fcm-nand";
+			reg = <0x01 0x00 0x40000>;
+			nand-ecc-mode = "none";
+			nand-ecc-step-size = <512>;
+			nand-ecc-strength  = <16>;
+
+			partition@00000000 {
+				reg = <0x00 0x20000>;
+				label = "NAND (RW) WG DTB Image";
+			};
+
+			partition@00020000 {
+				reg = <0x20000 0x500000>;
+				label = "NAND (RW) WG SYSA Kernel";
+			};
+
+			partition@00520000 {
+				reg = <0x520000 0x79e0000>;
+				label = "NAND (RW) WG SYSA_CODE";
+			};
+
+			partition@07f00000 {
+				reg = <0x7f00000 0x16000000>;
+				label = "NAND (RW) WG SYSA_DATA";
+			};
+
+			partition@1df00000 {
+				reg = <0x1df00000 0x500000>;
+				label = "NAND (RW) WG SYSB Kernel";
+			};
+
+			partition@1e400000 {
+				reg = <0x1e400000 0x1800000>;
+				label = "NAND (RW) WG SYSB_CODE";
+			};
+
+			partition@1fc00000 {
+				reg = <0x1fc00000 0x400000>;
+				label = "NAND (RW) WG KDUMP";
+			};
+		};
+	};
+
+	soc: soc@ffe00000 {
+		ranges = <0x0 0x0 0xffe00000 0x100000>;
+
+		gpio0: gpio-controller@fc00 {
+		};
+
+		i2c@3000 {
+			temperature-sensor@4c {
+				compatible = "adi,adt7461";
+				reg = <0x4c>;
+			};
+
+			eeprom@50 {
+				compatible = "atmel,24c256";
+				reg = <0x50>;
+			};
+
+			rtc@68 {
+				compatible = "dallas,ds1339";
+				reg = <0x68>;
+			};
+		};
+
+		i2c@3100 {
+			pmic@11 {
+				compatible = "zl2006";
+				reg = <0x11>;
+			};
+
+			gpio@18 {
+				compatible = "nxp,pca9557";
+				reg = <0x18>;
+			};
+
+			eeprom@52 {
+				compatible = "atmel,24c01";
+				reg = <0x52>;
+			};
+		};
+		
+		enet0: ethernet@24000 {
+			#address-cells = <0x01>;
+			#size-cells = <0x01>;
+			cell-index = <0x00>;
+			device_type = "network";
+			model = "eTSEC";
+			compatible = "gianfar";
+			reg = <0x24000 0x1000>;
+			ranges = <0x00 0x24000 0x1000>;
+			phy-connection-type = "rgmii-id";
+			fsl,magic-packet;
+			
+			fixed-link {
+				speed = <1000>;
+				full-duplex;
+			};
+
+			mdio@520 {
+				#address-cells = <0x01>;
+				#size-cells = <0x00>;
+				compatible = "fsl,gianfar-mdio";
+				reg = <0x520 0x20>;
+
+				switch0: phy0: ethernet-phy@0 {
+					compatible = "marvell,mv88e6085";
+					reg = <0x11>;
+					
+					dsa,member = <0 0>;
+					
+					mdio {
+						#address-cells = <1>;
+						#size-cells = <0>;
+	 
+						switch0phy0: switch0phy0@0 {
+							reg = <0x00>;
+							interrupt-parent = <&switch0>;
+						};
+	 
+						switch0phy1: switch0phy1@1 {
+							reg = <0x01>;
+							interrupt-parent = <&switch0>;
+						};
+	 
+						 switch0phy2: switch0phy2@2 {
+							reg = <0x02>;
+							interrupt-parent = <&switch0>;
+						 };
+
+						 switch0phy3: switch0phy3@3 {
+							reg = <0x03>;
+							interrupt-parent = <&switch0>;
+						 };
+
+						 switch0phy4: switch0phy4@4 {
+							reg = <0x04>;
+							interrupt-parent = <&switch0>;
+						 };
+					};
+					
+					ports {
+						port@0 {
+							reg = <0>;
+							label = "seth4";
+							phy-handle = <&switch0phy0>;
+						};
+
+						port@1 {
+							reg = <1>;
+							label = "seth5";
+							phy-handle = <&switch0phy1>;
+						};
+
+						port@2 {
+							reg = <2>;
+							label = "seth6";
+							phy-handle = <&switch0phy2>;
+						};
+
+						port@3 {
+							reg = <3>;
+							label = "sw0p3";
+							phy-handle = <&switch0phy3>;
+						};
+
+						port@4 {
+							reg = <4>;
+							label = "sw0p4";
+							phy-handle = <&switch0phy4>;
+						};
+
+						switch0port6: port@6 {
+							reg = <6>;
+							label = "cpu";
+							ethernet = <&enet2>;
+							phy-mode = "rgmii-id";
+							fixed-link {
+								speed = <1000>;
+								full-duplex;
+							};
+						};
+					};
+				};
+
+				switch1: phy1: ethernet-phy@1 {
+					compatible = "marvell,mv88e6085";
+					reg = <0x10>;
+
+					dsa,member = <1 0>;
+
+					mdio {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						switch1phy0: switch1phy0@0 {
+							reg = <0x00>;
+							interrupt-parent = <&switch1>;
+						};
+
+						switch1phy1: switch1phy1@1 {
+							reg = <0x01>;
+							interrupt-parent = <&switch1>;
+						};
+
+						switch1phy2: switch1phy2@2 {
+							reg = <0x02>;
+							interrupt-parent = <&switch1>;
+						};
+					};
+
+					ports {
+						port@0 {
+							reg = <0>;
+							label = "sw1p0";
+							phy-handle = <&switch1phy0>;
+						};
+
+						port@1 {
+							reg = <1>;
+							label = "sw1p1";
+							phy-handle = <&switch1phy1>;
+						};
+
+						port@2 {
+							reg = <2>;
+							label = "sw1p2";
+							phy-handle = <&switch1phy2>;
+						};
+
+						switch1port6: port@6 {
+							reg = <6>;
+							label = "cpu";
+							ethernet = <&enet0>;
+							phy-mode = "rgmii-td";
+							fixed-link {
+								speed = <1000>;
+								full-duplex;
+							};
+						};
+					};
+				};
+			};
+		};
+		
+		ethernet@25000 {
+			status = "disabled";
+		};
+
+		enet1: enet2: ethernet@26000 {
+			#address-cells = <0x01>;
+			#size-cells = <0x01>;
+			cell-index = <0x02>;
+			device_type = "network";
+			model = "eTSEC";
+			compatible = "gianfar";
+			reg = <0x26000 0x1000>;
+			ranges = <0x00 0x26000 0x1000>;
+			phy-connection-type = "rgmii-id";
+			fsl,magic-packet;
+			fixed-link {
+				speed = <1000>;
+				full-duplex;
+			};
+		};
+
+		usb@22000 {
+			phy_type = "ulpi";
+			dr_mode = "host";
+		};
+
+		ptp_clock@24e00 {
+			fsl,tclk-period = <5>;
+			fsl,tmr-prsc = <200>;
+			fsl,tmr-add = <0xCCCCCCCD>;
+			fsl,tmr-fiper1 = <0x3B9AC9FB>;
+			fsl,tmr-fiper2 = <0x0001869B>;
+			fsl,max-adj = <249999999>;
+		};
+		
+		pic@40000 {
+			interrupt-controller;
+			#address-cells = <0x00>;
+			#interrupt-cells = <0x04>;
+			reg = <0x40000 0x40000>;
+			compatible = "fsl,mpic";
+			device_type = "open-pic";
+			big-endian;
+			single-cpu-affinity;
+			last-interrupt-source = <0xff>;
+			linux,phandle = <0x01>;
+			phandle = <0x01>;
+		};
+		
+		timer@41100 {
+			compatible = "fsl,mpic-global-timer";
+			reg = <0x41100 0x100 0x41300 0x04>;
+			interrupts = <0x00 0x00 0x03 0x00 0x01 0x00 0x03 0x00 0x02 0x00 0x03 0x00 0x03 0x00 0x03 0x00>;
+		};
+		
+		timer@42100 {
+			compatible = "fsl,mpic-global-timer";
+			reg = <0x42100 0x100 0x42300 0x04>;
+			interrupts = <0x04 0x00 0x03 0x00 0x05 0x00 0x03 0x00 0x06 0x00 0x03 0x00 0x07 0x00 0x03 0x00>;
+		};
+	};
+
+	pci0: pcie@ffe08000 {
+		reg = <0 0xffe08000 0 0x1000>;
+		status = "disabled";
+	};
+
+	pci1: pcie@ffe09000 {
+		reg = <0 0xffe09000 0 0x1000>;
+		ranges = <0x2000000 0x0 0xa0000000 0 0xa0000000 0x0 0x20000000
+			  0x1000000 0x0 0x00000000 0 0xffc10000 0x0 0x10000>;
+		pcie@0 {
+			ranges = <0x2000000 0x0 0xa0000000
+				  0x2000000 0x0 0xa0000000
+				  0x0 0x20000000
+
+				  0x1000000 0x0 0x0
+				  0x1000000 0x0 0x0
+				  0x0 0x100000>;
+		};
+	};
+
+	pci2: pcie@ffe0a000 {
+		reg = <0 0xffe0a000 0 0x1000>;
+		ranges = <0x2000000 0x0 0x80000000 0 0x80000000 0x0 0x20000000
+			  0x1000000 0x0 0x00000000 0 0xffc00000 0x0 0x10000>;
+		pcie@0 {
+			ranges = <0x2000000 0x0 0x80000000
+				  0x2000000 0x0 0x80000000
+				  0x0 0x20000000
+
+				  0x1000000 0x0 0x0
+				  0x1000000 0x0 0x0
+				  0x0 0x100000>;
+		};
+	};
+};
+
+/include/ "fsl/p2020si-post.dtsi"
