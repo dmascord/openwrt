@@ -1,0 +1,41 @@
+From f8e48250eba70228f4449d7f7e523dfc93281b9a Mon Sep 17 00:00:00 2001
+From: Martin Kennedy <hurricos@gmail.com>
+Date: Thu, 25 Nov 2021 09:38:30 -0500
+Subject: [PATCH] Fix second CPU initialization on mpc85xx P1020
+
+Based on this email thread[1]:
+
+> When CONFIG_FSL_PMC is set to n, cpu_up_prepare is not assigned to
+> mpc85xx_pm_ops. I suspect that this is the cause of the current null
+> pointer access.
+
+[1]:
+https://lists.ozlabs.org/pipermail/linuxppc-dev/2021-November/237029.html
+
+Signed-off-by: Martin Kennedy <hurricos@gmail.com>
+
+diff --git a/arch/powerpc/platforms/85xx/smp.c b/arch/powerpc/platforms/85xx/smp.c
+index 83f4a6389..d7081e9af 100644
+--- a/arch/powerpc/platforms/85xx/smp.c
++++ b/arch/powerpc/platforms/85xx/smp.c
+@@ -220,7 +220,7 @@ static int smp_85xx_start_cpu(int cpu)
+ 	local_irq_save(flags);
+ 	hard_irq_disable();
+ 
+-	if (qoriq_pm_ops)
++	if (qoriq_pm_ops && qoriq_pm_ops->cpu_up_prepare)
+ 		qoriq_pm_ops->cpu_up_prepare(cpu);
+ 
+ 	/* if cpu is not spinning, reset it */
+@@ -292,7 +292,7 @@ static int smp_85xx_kick_cpu(int nr)
+ 		booting_thread_hwid = cpu_thread_in_core(nr);
+ 		primary = cpu_first_thread_sibling(nr);
+ 
+-		if (qoriq_pm_ops)
++		if (qoriq_pm_ops && qoriq_pm_ops->cpu_up_prepare)
+ 			qoriq_pm_ops->cpu_up_prepare(nr);
+ 
+ 		/*
+-- 
+2.25.1
+
