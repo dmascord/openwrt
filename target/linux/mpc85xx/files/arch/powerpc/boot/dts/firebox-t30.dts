@@ -24,6 +24,7 @@
 
 	memory {
 		device_type = "memory";
+		reg = <0x0 0x0 0x0 0x30000000>; /* 768 MiB; U-Boot caps FDT memory via fdt_fixup_memory_banks */
 	};
 
 	cpus {
