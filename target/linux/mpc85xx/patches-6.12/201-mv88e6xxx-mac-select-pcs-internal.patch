@@ -1,6 +1,6 @@
 --- a/drivers/net/dsa/mv88e6xxx/chip.c
 +++ b/drivers/net/dsa/mv88e6xxx/chip.c
-@@ -867,13 +867,27 @@
+@@ -869,13 +869,27 @@
  {
  	struct dsa_port *dp = dsa_phylink_to_port(config);
  	struct mv88e6xxx_chip *chip = dp->ds->priv;
