@@ -89,7 +89,6 @@ endif
 ifneq ($(wildcard $(PKG_BUILD_DIR)/.source_dir),)
   QUILT:=1
 endif
-PKG_SKIP_DOWNLOAD=$(USE_SOURCE_DIR)$(USE_GIT_TREE)$(USE_GIT_SRC_CHECKOUT)
 
 include $(INCLUDE_DIR)/quilt.mk
 
