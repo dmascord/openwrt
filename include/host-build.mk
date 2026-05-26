@@ -250,7 +250,7 @@ ifndef DUMP
 
   $(_host_target)host-prepare: $(HOST_STAMP_PREPARED)
   $(_host_target)host-configure: $(HOST_STAMP_CONFIGURED)
-  $(_host_target)host-compile: $(HOST_STAMP_BUILT) $(HOST_STAMP_INSTALLED)
+  $(_host_target)host-compile: $(HOST_STAMP_BUILT) $(HOST_STAMP_INSTALLED) $(HOST_STAMP_PROGRAMS)
   host-install: host-compile
 
   host-clean-build: FORCE
@@ -259,7 +259,7 @@ ifndef DUMP
 
   host-clean: host-clean-build
 	$(call Host/Clean)
-	rm -rf $(HOST_STAMP_INSTALLED)
+	rm -rf $(HOST_STAMP_INSTALLED) $(HOST_STAMP_PROGRAMS)
 
     ifneq ($(CONFIG_AUTOREMOVE),)
       host-compile:
