@@ -88,17 +88,36 @@
 			label = "lan11";
 			status = "okay";
 			phy-mode = "sgmii";
+			/* phy5 is overridden above to attach the SFP cage */
 			phy-handle = <&phy5>;
-			nvmem-cells = <&macaddr_eeprom_0 12>;
+			nvmem-cells = <&macaddr_eeprom_0 11>;
 			nvmem-cell-names = "mac-address";
 		};
 
+		/*
+		 * ethernet@2 (lan8) and ethernet@3 (lan9) are the WAN/WANB
+		 * ports on the ER-12. They connect to internal ports of the
+		 * VSC8514 quad-copper switch (phy8/phy9), not phy6/phy7 from
+		 * the e300 parent dtsi. Bindings are set explicitly here so
+		 * the ER-12 mapping is self-contained and not inherited from
+		 * the e300 (which uses phy6/phy7 for lan1/lan2 copper ports).
+		 */
 		ethernet@2 {
 			label = "lan8";
+			status = "okay";
+			phy-mode = "sgmii";
+			phy-handle = <&phy8>;
+			nvmem-cells = <&macaddr_eeprom_0 1>;
+			nvmem-cell-names = "mac-address";
 		};
 
 		ethernet@3 {
 			label = "lan9";
+			status = "okay";
+			phy-mode = "sgmii";
+			phy-handle = <&phy9>;
+			nvmem-cells = <&macaddr_eeprom_0 2>;
+			nvmem-cell-names = "mac-address";
 		};
 	};
 
