@@ -27,8 +27,6 @@ HOST_STAMP_BUILT:=$(HOST_BUILD_DIR)/.built
 HOST_BUILD_PREFIX?=$(if $(IS_PACKAGE_BUILD),$(STAGING_DIR_HOSTPKG),$(STAGING_DIR_HOST))
 HOST_STAMP_INSTALLED:=$(HOST_BUILD_PREFIX)/stamp/.$(PKG_NAME)_installed
 HOST_STAMP_PROGRAMS:=$(foreach program,$(PKG_PROGRAMS),$(dir $(HOST_STAMP_INSTALLED))$(subst $(PKG_NAME),$(program),$(notdir $(HOST_STAMP_INSTALLED))) )
-
-
 override MAKEFLAGS=
 
 include $(INCLUDE_DIR)/autotools.mk
@@ -107,8 +105,6 @@ ifneq ($(wildcard $(PKG_BUILD_DIR)/.source_dir),)
   QUILT:=1
 endif
 
-PKG_SKIP_DOWNLOAD=$(USE_SOURCE_DIR)$(USE_GIT_TREE)$(USE_GIT_SRC_CHECKOUT)
-
 ifdef USE_GIT_SRC_CHECKOUT
   define Host/Prepare/Default
 	mkdir -p $(HOST_BUILD_DIR)
@@ -183,8 +179,6 @@ endef
 define Host/Install
   $(call Host/Install/Default,$(HOST_BUILD_PREFIX))
 endef
-
-
 ifneq ($(if $(HOST_QUILT),,$(CONFIG_AUTOREBUILD)),)
   define HostHost/Autoclean
     $(call rdep,${CURDIR} $(PKG_FILE_DEPENDS),$(HOST_STAMP_PREPARED))
