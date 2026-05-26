@@ -73,7 +73,7 @@ multicast_guarded_dev() {
 		itf|switch0|lan4|lan5|lan6|lan7)
 			return 0
 			;;
-		esac
+	esac
 
 	return 1
 }
