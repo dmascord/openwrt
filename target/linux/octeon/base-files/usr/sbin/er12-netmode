@@ -4,11 +4,10 @@ set -eu
 
 usage() {
 cat <<'USAGE'
-Usage: er12-netmode stock|safe|all [--no-reload]
+Usage: er12-netmode stock|all [--no-reload]
 
 Modes:
   stock - stock-like split: LAN on br-lan (switch0), WAN on lan8, WANB on lan9
-  safe  - same as stock, explicit management-safe baseline
   all   - bridge all front paths: switch0 + lan8 + lan9 + lan10 + lan11
 USAGE
 }
@@ -124,7 +123,7 @@ fi
 ensure_er12
 
 case "$mode" in
-	stock|safe) mode_stock_like ;;
+	stock) mode_stock_like ;;
 	all) mode_all ;;
 	*)
 		usage
