@@ -26,6 +26,7 @@ HOST_STAMP_CONFIGURED:=$(HOST_BUILD_DIR)/.configured
 HOST_STAMP_BUILT:=$(HOST_BUILD_DIR)/.built
 HOST_BUILD_PREFIX?=$(if $(IS_PACKAGE_BUILD),$(STAGING_DIR_HOSTPKG),$(STAGING_DIR_HOST))
 HOST_STAMP_INSTALLED:=$(HOST_BUILD_PREFIX)/stamp/.$(PKG_NAME)_installed
+HOST_STAMP_PROGRAMS:=$(foreach program,$(PKG_PROGRAMS),$(dir $(HOST_STAMP_INSTALLED))$(subst $(PKG_NAME),$(program),$(notdir $(HOST_STAMP_INSTALLED))) )
 
 
 override MAKEFLAGS=
@@ -230,7 +231,7 @@ ifndef DUMP
 		$(foreach hook,$(Hooks/HostInstall/Post),$(call $(hook))$(sep))
 		mkdir -p $$(shell dirname $$@)
 		touch $(HOST_STAMP_BUILT)
-		touch $$@
+		touch $$@ $(HOST_STAMP_PROGRAMS)
 
   $(call DefaultTargets,$(patsubst %,host-%,$(DEFAULT_SUBDIR_TARGETS)))
   ifndef STAMP_BUILT
