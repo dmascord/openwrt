@@ -110,6 +110,7 @@
 			status = "okay";
 			phy-mode = "sgmii";
 			cavium,force-link-up;
+			cavium,pcs-reset-on-open;
 			nvmem-cells = <&macaddr_eeprom_0 3>;
 			nvmem-cell-names = "mac-address";
 		};
@@ -119,6 +120,7 @@
 			status = "okay";
 			phy-mode = "sgmii";
 			cavium,force-link-up;
+			cavium,pcs-reset-on-open;
 			nvmem-cells = <&macaddr_eeprom_0 4>;
 			nvmem-cell-names = "mac-address";
 		};
@@ -128,6 +130,7 @@
 			status = "okay";
 			phy-mode = "sgmii";
 			cavium,force-link-up;
+			cavium,pcs-reset-on-open;
 			nvmem-cells = <&macaddr_eeprom_0 5>;
 			nvmem-cell-names = "mac-address";
 		};
@@ -137,6 +140,7 @@
 			status = "okay";
 			phy-mode = "sgmii";
 			cavium,force-link-up;
+			cavium,pcs-reset-on-open;
 			nvmem-cells = <&macaddr_eeprom_0 6>;
 			nvmem-cell-names = "mac-address";
 		};
@@ -156,6 +160,7 @@
 			reg = <0>;
 			phy-mode = "sgmii";
 			cavium,force-link-up;
+			cavium,pcs-reset-on-open;
 			nvmem-cells = <&macaddr_eeprom_0 7>;
 			nvmem-cell-names = "mac-address";
 		};
@@ -167,6 +172,7 @@
 			reg = <1>;
 			phy-mode = "sgmii";
 			cavium,force-link-up;
+			cavium,pcs-reset-on-open;
 			nvmem-cells = <&macaddr_eeprom_0 8>;
 			nvmem-cell-names = "mac-address";
 		};
@@ -178,6 +184,7 @@
 			reg = <2>;
 			phy-mode = "sgmii";
 			cavium,force-link-up;
+			cavium,pcs-reset-on-open;
 			nvmem-cells = <&macaddr_eeprom_0 9>;
 			nvmem-cell-names = "mac-address";
 		};
@@ -189,6 +196,7 @@
 			reg = <3>;
 			phy-mode = "sgmii";
 			cavium,force-link-up;
+			cavium,pcs-reset-on-open;
 			nvmem-cells = <&macaddr_eeprom_0 10>;
 			nvmem-cell-names = "mac-address";
 			};
