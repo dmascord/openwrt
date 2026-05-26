@@ -199,6 +199,6 @@
 			cavium,pcs-reset-on-open;
 			nvmem-cells = <&macaddr_eeprom_0 10>;
 			nvmem-cell-names = "mac-address";
-			};
 		};
+	};
 };
