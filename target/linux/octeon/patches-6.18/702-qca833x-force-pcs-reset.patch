@@ -121,3 +121,4 @@ Signed-off-by: Andrew LaMarche <andrewjlamarche@gmail.com>
  	return __cvmx_helper_sgmii_hardware_init_link_speed(interface, index,
  							    link_info);
  }
+ 

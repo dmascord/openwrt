@@ -88,3 +88,4 @@ Date:   Tue Jun 17 13:58:19 2025 +0200
 +extern int ubnt_prune_device_tree(void);
  
  #endif
+ 
