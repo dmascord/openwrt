@@ -1,7 +1,7 @@
 From: Damien Mascord <tusker@tusker.org>
 Subject: [PATCH] net: dsa: mv88e6xxx: return no PCS for internal PHY ports without pcs_ops
 
-Linux 6.12.87 tightened phylink PCS validation. For mv88e6xxx variants
+Linux 6.18 tightened phylink PCS validation. For mv88e6xxx variants
 that have internal PHY ports but do not provide pcs_ops,
 mv88e6xxx_mac_select_pcs() returning ERR_PTR(-EOPNOTSUPP) causes
 phylink_validate_mac_and_pcs() to reject those ports.
@@ -28,7 +28,7 @@ Signed-off-by: Damien Mascord <tusker@tusker.org>
 +	 * treats it as "no PCS present" and skips PCS validation,
 +	 * falling through to MAC capabilities instead.
 +	 * Returning ERR_PTR(-EOPNOTSUPP) causes a validation failure in
-+	 * phylink_validate_mac_and_pcs() introduced in kernel 6.12.87.
++	 * phylink_validate_mac_and_pcs() introduced in kernel 6.18.
 +	 */
 +	if (!chip->info->ops->pcs_ops) {
 +		if (mv88e6xxx_phy_is_internal(chip, dp->index))
