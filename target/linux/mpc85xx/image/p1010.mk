@@ -129,9 +129,12 @@ TARGET_DEVICES += watchguard_firebox-t15
 define Device/watchguard_firebox-t30
   DEVICE_VENDOR := Watchguard
   DEVICE_MODEL := Firebox T30-W
+  DEVICE_ALT0_VENDOR := Watchguard
+  DEVICE_ALT0_MODEL := Firebox T30
   DEVICE_PACKAGES := ath10k-firmware-qca988x-ct block-mount kmod-fs-ext4 \
-    e2fsprogs f2fsck mkf2fs kmod-ath10k-ct kmod-fs-f2fs kmod-fs-vfat \
-    kmod-nls-cp437 kmod-nls-iso8859-1 kmod-usb-storage kmod-usb2
+	kmod-ath10k-ct kmod-usb-storage kmod-usb2 \
+	kmod-rtc-s35390a kmod-tpm-i2c-atmel fdisk resize2fs
+  IMAGE_SIZE := 64m
   FILESYSTEMS := squashfs
   KERNEL = kernel-bin | uImage none
   KERNEL_INITRAMFS := kernel-bin | uImage none
@@ -141,7 +144,7 @@ define Device/watchguard_firebox-t30
   IMAGES := factory.img.gz sysupgrade.bin
   IMAGE/factory.img.gz := watchguard_firebox-t30-bootfs | watchguard_firebox-t30-factory
   IMAGE/sysupgrade.bin := watchguard_firebox-t30-bootfs | sysupgrade-tar \
-	kernel=$(KDIR)/watchguard_firebox-t30-bootfs.img | append-metadata
+	kernel=$(KDIR)/watchguard_firebox-t30-bootfs.img | append-metadata | check-size
 endef
 TARGET_DEVICES += watchguard_firebox-t30
 
