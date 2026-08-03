@@ -1,0 +1,42 @@
+name: Build OpenWrt for WatchGuard Firebox T30-W
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison gawk gcc-multilib g++-multilib \
+          gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget
+
+      - name: Update and install feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Generate configuration
+        run: |
+          echo "CONFIG_TARGET_mpc85xx=y" > .config
+          echo "CONFIG_TARGET_mpc85xx_p1010=y" >> .config
+          echo "CONFIG_TARGET_mpc85xx_p1010_DEVICE_watchguard_firebox-t30-w=y" >> .config
+          make defconfig
+
+      - name: Build firmware
+        run: |
+          make -j$(nproc) download
+          make -j$(nproc) world || make -j1 V=s
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-firebox-t30w
+          path: bin/targets/mpc85xx/p1010/
