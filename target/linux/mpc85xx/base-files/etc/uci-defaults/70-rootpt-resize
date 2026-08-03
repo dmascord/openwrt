@@ -1,0 +1,7 @@
+#!/bin/sh
+
+if [ -b /dev/mmcblk0p4 ]; then
+    resize2fs /dev/mmcblk0p4
+fi
+
+exit 0
