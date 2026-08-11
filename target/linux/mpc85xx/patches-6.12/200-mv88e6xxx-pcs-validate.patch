@@ -1,6 +1,6 @@
 --- a/drivers/net/dsa/mv88e6xxx/pcs-6185.c
 +++ b/drivers/net/dsa/mv88e6xxx/pcs-6185.c
-@@ -106,10 +106,22 @@
+@@ -106,10 +106,23 @@ static void mv88e6185_pcs_an_restart(struct phylink_pcs *pcs)
  {
  }
  
