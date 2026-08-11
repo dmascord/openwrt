@@ -3,7 +3,7 @@
 # WatchGuard T30-W SD card upgrade script
 #
 # SD Card Layout:
-#   p1: 1MB placeholder (reserved)
+#   p1: 2MB placeholder (reserved)
 #   p2: squashfs root (kernel boots with root=/dev/mmcblk0p2)
 #   p3: ext2 boot partition (U-Boot loads kernel from here)
 #   p4: ext4 rootfs_data (overlay/config - NEVER touch during upgrade)

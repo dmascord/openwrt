@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# WatchGuard T30-W SD card overlay mount + auto-expand
+#
+# SD card layout (see scripts/make_watchguard_t30w_sdimage.sh):
+#   p1: 2MB placeholder
+#   p2: 64MB squashfs root (kernel boots with root=/dev/mmcblk0p2)
+#   p3: 32MB boot partition (U-Boot loads kernel from here)
+#   p4: rest of card - ext4 rootfs_data overlay
+#
+# Problem: fstools' mount_root (volume_find("rootfs_data")) selects the
+# rootdisk driver, which carves a loopback overlay out of the end of the
+# squashfs partition, instead of using p4. The partname driver can't find
+# p4 because MBR partitions have no PARTNAME sysfs attribute. The result
+# is a ~45MB loop overlay, not the 2GB p4.
+#
+# Strategy: this file sources AFTER 80_mount_root, so our definition of
+# do_mount_root() is the most recent one in the shell. 80_mount_root only
+# stores the name "do_mount_root" in the preinit_main hook list, and the
+# hook runs after every /lib/preinit/* file has been sourced, so the hook
+# calls OUR version. We mount p4 directly as the overlay and pivot once,
+# avoiding fstools' loop overlay entirely.
+#
+# We also auto-expand the p4 filesystem here (before it is mounted) so old
+# factory images where p4 was created as only 100MB grow to fill the
+# partition. resize2fs is idempotent and non-destructive.
+
+do_mount_root() {
+	if [ -b /dev/mmcblk0p4 ]; then
+		# Auto-expand: if the p4 filesystem is smaller than its partition,
+		# grow it to fill the space. resize2fs on an unmounted filesystem
+		# is fast, safe and a no-op when nothing needs to be done.
+		if [ -x /sbin/resize2fs ]; then
+			resize2fs /dev/mmcblk0p4 >/dev/null 2>&1 || true
+		fi
+
+		# Mount p4 as the overlay storage
+		mkdir -p /overlay
+		if mount -t ext4 /dev/mmcblk0p4 /overlay 2>/dev/null; then
+			[ -d /overlay/upper ] || mkdir -p /overlay/upper
+			[ -d /overlay/work ]  || mkdir -p /overlay/work
+			chmod 755 /overlay/upper /overlay/work
+
+			# Config restore from a sysupgrade archive, if present
+			[ -f /sysupgrade.tgz -o -f /tmp/sysupgrade.tar ] && {
+				echo "- config restore -"
+				cp /etc/passwd /etc/group /etc/shadow /tmp
+				cd /
+				[ -f /sysupgrade.tgz ] && tar xzf /sysupgrade.tgz
+				[ -f /tmp/sysupgrade.tar ] && tar xf /tmp/sysupgrade.tar
+				missing_lines /tmp/passwd /etc/passwd >> /etc/passwd
+				missing_lines /tmp/group /etc/group >> /etc/group
+				missing_lines /tmp/shadow /etc/shadow >> /etc/shadow
+				rm /tmp/passwd /tmp/group /tmp/shadow
+				sync
+			}
+
+			# Switch to overlayfs: lowerdir=/ (current squashfs root),
+			# upperdir=/overlay/upper, workdir=/overlay/work.
+			# fopivot mounts the overlay on /mnt then calls pivot_root once.
+			mkdir -p /mnt
+			fopivot /overlay/upper /overlay/work /rom
+			echo "T30-W: overlay from p4 (/dev/mmcblk0p4)"
+			return 0
+		fi
+		echo "T30-W: p4 mount failed, falling back to fstools overlay" >&2
+	fi
+
+	# Standard OpenWrt overlay path (rootdisk loopback / ramoverlay)
+	mount_root start "$(compose_rootfs_mount_options)"
+	boot_run_hook preinit_mount_root
+
+	[ -f /sysupgrade.tgz -o -f /tmp/sysupgrade.tar ] && {
+		echo "- config restore -"
+		cp /etc/passwd /etc/group /etc/shadow /tmp
+		cd /
+		[ -f /sysupgrade.tgz ] && tar xzf /sysupgrade.tgz
+		[ -f /tmp/sysupgrade.tar ] && tar xf /tmp/sysupgrade.tar
+		missing_lines /tmp/passwd /etc/passwd >> /etc/passwd
+		missing_lines /tmp/group /etc/group >> /etc/group
+		missing_lines /tmp/shadow /etc/shadow >> /etc/shadow
+		rm /tmp/passwd /tmp/group /tmp/shadow
+		sync
+	}
+
+	return 0
+}

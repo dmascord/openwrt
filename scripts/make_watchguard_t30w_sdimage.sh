@@ -70,13 +70,15 @@ if [ "$bootfs_size" -gt "$p3_size" ]; then
 fi
 dd if="$bootfs_img" of="$output_raw" bs=512 seek=$((p3_offset / 512)) conv=notrunc count=$((p3_size / 512)) status=none
 
-# Create p4 rootfs_data (100MB initially, expandable within the 2GB partition)
-p4_fs_size_mb=100
-"$hostbin/mkfs.ext4" -q -F -L rootfs_data "$workdir/p4.img" $((p4_fs_size_mb * 1024))
+# p4 rootfs_data: create at full partition size so no resize is needed
+# at first boot (the MBR slot is 2048MB but ptgen may adjust it for
+# alignment - use the actual partition byte count from ptgen).
+p4_actual_kb=$((p4_size / 1024))
+"$hostbin/mkfs.ext4" -q -F -L rootfs_data "$workdir/p4.img" "$p4_actual_kb"
 dd if="$workdir/p4.img" of="$output_raw" bs=512 seek=$((p4_offset / 512)) conv=notrunc status=none
 
 gzip -c "$output_raw" > "$output_gz"
 sha256sum "$output_gz" > "$output_gz.sha256"
 echo "Done: $output_gz"
-echo "Layout: p1=2MB(placeholder), p2=64MB(squashfs), p3=32MB(boot), p4=2GB(rootfs_data,expandable)"
-echo "NOTE: rootfs_data is initially 100MB - expand with: resize2fs /dev/mmcblk0p4"
+echo "Layout: p1=2MB(placeholder), p2=64MB(squashfs), p3=32MB(boot), p4=full-p4(rootfs_data)"
+echo "NOTE: rootfs_data spans the entire p4 partition - no resize needed at boot"
