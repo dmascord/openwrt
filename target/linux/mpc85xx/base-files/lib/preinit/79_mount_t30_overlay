@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+mount_t30_overlay() {
+	[ -b /dev/mmcblk0p4 ] || return 0
+	[ "$(blkid -s LABEL -o value /dev/mmcblk0p4)" = "rootfs_data" ] || return 0
+	mkdir -p /overlay /overlay/work
+	mount -t ext4 /dev/mmcblk0p4 /overlay || return 0
+	fopivot /overlay /overlay/work /rom
+}
+
+boot_hook_add preinit_mount_root mount_t30_overlay
