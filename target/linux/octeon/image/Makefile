@@ -79,7 +79,7 @@ define Device/ubnt_edgerouter-12
   $(Device/ubnt_edgerouter-e300)
   DEVICE_MODEL := EdgeRouter 12
   DEVICE_DTS := cn7130_ubnt_edgerouter-12
-  DEVICE_PACKAGES += kmod-bonding kmod-8021q ip-full ip-bridge
+  DEVICE_PACKAGES += kmod-bonding ip-full ip-bridge
 endef
 TARGET_DEVICES += ubnt_edgerouter-12
 
