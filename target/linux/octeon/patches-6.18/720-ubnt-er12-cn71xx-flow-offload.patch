@@ -1243,16 +1243,15 @@
 +/*
 + * Drop a tag that already matched. The inner ethertype slides into place.
 + *
-+ * The mac header is moved with the data: skb->data has to stay at the mac
-+ * header, because cvm_oct_xmit() calls __skb_vlan_pop(), which refuses to
-+ * run when skb->data is not at the mac header.
++ * Keep skb->data at the MAC header after removing the tag. cvm_oct_xmit()
++ * calls __skb_vlan_pop(), which refuses to run when skb->data is not at
++ * the MAC header.
 + */
 +static void cvm_flow_pop_vlan(struct sk_buff *skb)
 +{
 +	memmove(skb->data + VLAN_HLEN, skb->data, 2 * ETH_ALEN);
 +	skb_pull(skb, VLAN_HLEN);
-+	if (skb_mac_header_was_set(skb))
-+		skb->mac_header += VLAN_HLEN;
++	skb_reset_mac_header(skb);
 +}
 +
 +/*
@@ -1313,6 +1312,9 @@
 +		return false;
 +	if (unlikely(skb->len < ETH_HLEN + sizeof(struct iphdr)))
 +		return false;
++
++	/* cvm_oct_xmit() and the VLAN helpers require skb->data at the MAC header. */
++	skb_reset_mac_header(skb);
 +
 +	eth = (struct ethhdr *)skb->data;
 +	inner = eth->h_proto;
