@@ -420,61 +420,12 @@
 +
 +static struct net_device *cvm_flow_physical(struct net_device *outdev)
 +{
-+	struct net_device *found = NULL;
-+	struct net_device *lower;
-+	struct list_head *iter;
-+
-+	if (!outdev)
++	/* A bond must retain its layer2+3 lane selection in the normal path. */
++	if (!outdev || netif_is_bond_master(outdev))
 +		return NULL;
 +	if (cvm_flow_octeon_dev(outdev))
 +		return outdev;
-+
-+	/*
-+	 * The ER-12 egress path is br-lan -> switch0 (VLAN 4094) ->
-+	 * itf (a Linux bond) -> lan4..lan7. Every one of those Octeon
-+	 * ports reaches the same QCA8511 fabric, so a bond has several
-+	 * valid physical ports. Upstream refuses a second live Octeon
-+	 * port, which would disable the shortcut on this board
-+	 * entirely. The first slave that is up and has a carrier is
-+	 * picked instead, which is functionally correct because they
-+	 * all reach the same fabric.
-+	 *
-+	 * A live non-Octeon slave still refuses the shortcut: the
-+	 * neighbour may live behind that other slave, and the frame
-+	 * must not be sent out of this bond.
-+	 */
-+	if (netif_is_bond_master(outdev)) {
-+		iter = &outdev->adj_list.lower;
-+		while ((lower = netdev_next_lower_dev_rcu(outdev, &iter))) {
-+			if (!(lower->flags & IFF_UP))
-+				continue;
-+			if (!cvm_flow_octeon_dev(lower))
-+				return NULL;
-+			if (!netif_carrier_ok(lower))
-+				continue;
-+			if (!found)
-+				found = lower;
-+		}
-+		return found;
-+	}
-+
-+	if (!netif_is_bridge_master(outdev))
-+		return NULL;
-+
-+	iter = &outdev->adj_list.lower;
-+	while ((lower = netdev_next_lower_dev_rcu(outdev, &iter))) {
-+		if (!(lower->flags & IFF_UP))
-+			continue;
-+		if (!cvm_flow_octeon_dev(lower) &&
-+		    !netif_is_bond_master(lower))
-+			return NULL;
-+		if (!netif_carrier_ok(lower))
-+			continue;
-+		if (found)
-+			return NULL;
-+		found = lower;
-+	}
-+	return found;
++	return NULL;
 +}
 +
 +/* Caller holds RCU, just as the flowtable forward-path builder does. */
