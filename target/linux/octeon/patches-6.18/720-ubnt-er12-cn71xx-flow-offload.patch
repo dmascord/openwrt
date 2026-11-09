@@ -89,7 +89,7 @@
  
 --- /dev/null
 +++ b/drivers/staging/octeon/ethernet-flow.c
-@@ -0,0 +1,1472 @@
+@@ -0,0 +1,1475 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Shortcut for established IPv4 and IPv6 flows on the Octeon receive path.
