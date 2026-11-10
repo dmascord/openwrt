@@ -475,10 +475,14 @@
 +			      u8 *h_source)
 +{
 +	struct net_device_path_stack stack;
++	struct net_device_path_ctx ctx = {
++		.dev = outdev,
++	};
 +	const struct net_device *dev;
 +	int i;
 +
-+	if (dev_fill_forward_path(outdev, h_dest, &stack) < 0)
++	ether_addr_copy(ctx.daddr, h_dest);
++	if (dev_fill_forward_path(&ctx, &stack) < 0)
 +		return -ENODEV;
 +
 +	for (i = 0; i + 1 < stack.num_paths; i++) {
