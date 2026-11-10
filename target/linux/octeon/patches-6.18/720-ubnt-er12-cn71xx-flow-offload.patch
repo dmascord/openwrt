@@ -89,7 +89,7 @@
  
 --- /dev/null
 +++ b/drivers/staging/octeon/ethernet-flow.c
-@@ -0,0 +1,1426 @@
+@@ -0,0 +1,1467 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Shortcut for established IPv4 and IPv6 flows on the Octeon receive path.
@@ -137,6 +137,8 @@
 +#include <linux/jhash.h>
 +#include <linux/module.h>
 +#include <linux/mutex.h>
++#include <linux/sysfs.h>
++#include <linux/of.h>
 +#include <linux/ppp_defs.h>
 +#include <linux/tcp.h>
 +#include <linux/udp.h>
@@ -170,27 +172,66 @@
 +module_param_named(flow_binds, cvm_oct_flow_binds, int, 0444);
 +MODULE_PARM_DESC(flow_binds, "Ingress flowtable bindings still held");
 +
-+static unsigned int flow_shortcut_hit;
-+static unsigned int flow_shortcut_miss;
-+static unsigned int flow_shortcut_installed;
-+static unsigned int flow_shortcut_rejected;
-+module_param(flow_shortcut_hit, uint, 0444);
-+module_param(flow_shortcut_miss, uint, 0444);
-+module_param(flow_shortcut_installed, uint, 0444);
-+module_param(flow_shortcut_rejected, uint, 0444);
++/*
++ * The receive path runs on every CPU, so the counters are atomic. They
++ * are exported read-only: the values are evidence, not a control. A
++ * custom get keeps the sysfs format a plain decimal number, so the
++ * existing scripts and the runbook keep working.
++ */
++static atomic64_t flow_shortcut_hit;
++static atomic64_t flow_shortcut_miss;
++static atomic64_t flow_shortcut_installed;
++static atomic64_t flow_shortcut_rejected;
++
++static int cvm_flow_counter_set(const char *val, const struct kernel_param *kp)
++{
++	return -EPERM;
++}
++static int cvm_flow_counter_get(char *buffer, const struct kernel_param *kp)
++{
++	return sysfs_emit(buffer, "%lld\n",
++			  (long long)atomic64_read((atomic64_t *)kp->arg));
++}
++
++static const struct kernel_param_ops cvm_flow_counter_ops = {
++	.set = cvm_flow_counter_set,
++	.get = cvm_flow_counter_get,
++};
++module_param_cb(flow_shortcut_hit, &cvm_flow_counter_ops,
++		&flow_shortcut_hit, 0444);
++module_param_cb(flow_shortcut_miss, &cvm_flow_counter_ops,
++		&flow_shortcut_miss, 0444);
++module_param_cb(flow_shortcut_installed, &cvm_flow_counter_ops,
++		&flow_shortcut_installed, 0444);
++module_param_cb(flow_shortcut_rejected, &cvm_flow_counter_ops,
++		&flow_shortcut_rejected, 0444);
++MODULE_PARM_DESC(flow_shortcut_hit, "Packets rewritten by the fast path");
++MODULE_PARM_DESC(flow_shortcut_miss, "Flow lookups that did not match");
++MODULE_PARM_DESC(flow_shortcut_installed, "Flows handed to the driver");
++MODULE_PARM_DESC(flow_shortcut_rejected, "Flows the driver refused");
 +
 +/*
 + * The model check reads the coprocessor id, so the answer is cached.
 + * PKND marks the CN68xx word2. The receive path calls this on every
 + * packet while the shortcut is on.
 + */
++static bool cvm_oct_flow_board_ok(void)
++{
++	static int ok = -1;
++
++	if (READ_ONCE(ok) < 0)
++		WRITE_ONCE(ok, of_machine_is_compatible("ubnt,edgerouter-12"));
++	return READ_ONCE(ok);
++}
++
 +static bool cvm_oct_flow_chip_ok(void)
 +{
 +	static int ok = -1;
 +
 +	if (READ_ONCE(ok) < 0)
 +		WRITE_ONCE(ok, (OCTEON_IS_MODEL(OCTEON_CN50XX) ||
-+				   OCTEON_IS_MODEL(OCTEON_CN71XX)) &&
++				   (OCTEON_IS_MODEL(OCTEON_CN71XX) &&
++				    cvm_oct_flow_board_ok())) &&
 +				   !octeon_has_feature(OCTEON_FEATURE_PKND));
 +	return READ_ONCE(ok);
 +}
@@ -644,7 +685,7 @@
 +
 +	if (cvm_encap_from_tuple(tuple, &in_encap) ||
 +	    cvm_encap_from_tuple(other, &out_encap)) {
-+		flow_shortcut_rejected++;
++		atomic64_inc(&flow_shortcut_rejected);
 +		net_info_ratelimited("octeon flow shortcut: encap %u/%u proto %04x+%04x / %04x+%04x\n",
 +				     (unsigned int)tuple->encap_num,
 +				     (unsigned int)other->encap_num,
@@ -662,7 +703,7 @@
 +	 * stays on the normal path.
 +	 */
 +	if (v6 && tuple->xmit_type != FLOW_OFFLOAD_XMIT_DIRECT) {
-+		flow_shortcut_rejected++;
++		atomic64_inc(&flow_shortcut_rejected);
 +		net_info_ratelimited("octeon flow shortcut: ipv6 xmit %u %pI6c:%u -> %pI6c:%u\n",
 +				     tuple->xmit_type,
 +				     &tuple->src_v6, ntohs(tuple->src_port),
@@ -673,7 +714,7 @@
 +	ret = cvm_flow_l2(block->net, flow, tuple, out_encap.pppoe,
 +			  h_source, h_dest, &txdev);
 +	if (ret) {
-+		flow_shortcut_rejected++;
++		atomic64_inc(&flow_shortcut_rejected);
 +		if (v6)
 +			net_info_ratelimited("octeon flow shortcut: skip %pI6c:%u -> %pI6c:%u (%d)\n",
 +					     &tuple->src_v6, ntohs(tuple->src_port),
@@ -696,7 +737,7 @@
 +		dev_put(rxdev);
 +	}
 +	if (ret) {
-+		flow_shortcut_rejected++;
++		atomic64_inc(&flow_shortcut_rejected);
 +		dev_put(txdev);
 +		return ret;
 +	}
@@ -704,7 +745,7 @@
 +	if (out_encap.pppoe || out_encap.vlan) {
 +		if (is_zero_ether_addr(h_dest)) {
 +			dev_put(txdev);
-+			flow_shortcut_rejected++;
++			atomic64_inc(&flow_shortcut_rejected);
 +			return -ENOENT;
 +		}
 +	}
@@ -811,7 +852,7 @@
 +	hlist_add_head(&e->cookie_node,
 +		       &cvm_flow_cookies[hash & (CVM_FLOW_BUCKETS - 1)]);
 +	list_add_tail(&e->owner_node, &block->flows);
-+	flow_shortcut_installed++;
++	atomic64_inc(&flow_shortcut_installed);
 +	spin_unlock_bh(&cvm_flow_lock);
 +	return 0;
 +}
@@ -1445,7 +1486,7 @@
 +	}
 +	if (!e || e->v6 != is_v6) {
 +		rcu_read_unlock();
-+		flow_shortcut_miss++;
++		atomic64_inc(&flow_shortcut_miss);
 +		return false;
 +	}
 +	push_len = (e->out_vlan ? VLAN_HLEN : 0) +
@@ -1460,7 +1501,7 @@
 +	    !(e->txdev->flags & IFF_UP) || !netif_carrier_ok(e->txdev) ||
 +	    netif_xmit_stopped(netdev_get_tx_queue(e->txdev, 0))) {
 +		rcu_read_unlock();
-+		flow_shortcut_miss++;
++		atomic64_inc(&flow_shortcut_miss);
 +		return false;
 +	}
 +
@@ -1488,7 +1529,7 @@
 +	atomic64_inc(&e->pkts);
 +	atomic64_add(pkt_len, &e->bytes);
 +	WRITE_ONCE(e->lastused, nf_flowtable_time_stamp);
-+	flow_shortcut_hit++;
++	atomic64_inc(&flow_shortcut_hit);
 +
 +	/*
 +	 * cvm_oct_xmit takes the skb and frees other skbs, so it must not
