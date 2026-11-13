@@ -23,7 +23,7 @@ define Package/wifi-surveyor-core
   CATEGORY:=Network
   TITLE:=Wi-Fi survey core API/aggregator
   PKGARCH:=all
-  DEPENDS:=+wifi-surveyor-agent +rpcd +uhttpd +openssh-client +jsonfilter
+  DEPENDS:=+wifi-surveyor-agent +rpcd +uhttpd +jsonfilter
 endef
 
 define Package/wifi-surveyor-core/description
