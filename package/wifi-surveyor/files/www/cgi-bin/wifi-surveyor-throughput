@@ -1,0 +1,32 @@
+#!/bin/sh
+
+set -eu
+
+CFG=wifi-surveyor.main
+
+kv_get() {
+	local key="$1"
+	printf '%s' "${QUERY_STRING:-}" | tr '&' '\n' | sed -n "s/^${key}=//p" | head -n1
+}
+
+auth_token="$(uci -q get ${CFG}.auth_token || true)"
+provided_token="${HTTP_X_AUTH_TOKEN:-}"
+[ -n "$provided_token" ] || provided_token="$(kv_get token)"
+
+[ -n "$auth_token" ] || { echo "Status: 500 Internal Server Error"; echo; exit 0; }
+[ "$provided_token" = "$auth_token" ] || { echo "Status: 401 Unauthorized"; echo; exit 0; }
+
+bytes="$(kv_get bytes)"
+case "$bytes" in
+	''|*[!0-9]*) bytes=3000000 ;;
+esac
+[ "$bytes" -ge 1024 ] || bytes=1024
+[ "$bytes" -le 20000000 ] || bytes=20000000
+
+echo "Content-Type: application/octet-stream"
+echo "Cache-Control: no-store"
+echo "Content-Length: $bytes"
+echo
+
+dd if=/dev/zero bs=4096 count=$(( (bytes + 4095) / 4096 )) 2>/dev/null | head -c "$bytes"
+

@@ -1,0 +1,60 @@
+#!/bin/sh
+
+set -eu
+
+STATE_DIR='/tmp/wifi-surveyor'
+STATE_FILE="${STATE_DIR}/latest.json"
+LOCK_DIR='/var/lock/wifi-surveyor-cache.lock'
+
+sha256_hex() {
+	local data="${1:-}"
+	if command -v sha256sum >/dev/null 2>&1; then
+		printf '%s' "$data" | sha256sum | awk '{print $1}'
+	elif command -v openssl >/dev/null 2>&1; then
+		printf '%s' "$data" | openssl dgst -sha256 2>/dev/null | sed 's/^.*= //'
+	else
+		return 1
+	fi
+}
+
+mkdir -p "$STATE_DIR"
+
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+	exit 0
+fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+
+tmp="${STATE_FILE}.tmp.$$"
+if /usr/sbin/wifi-surveyor-agent --json >"$tmp" 2>/dev/null; then
+	mv "$tmp" "$STATE_FILE"
+else
+	rm -f "$tmp"
+	exit 1
+fi
+
+push_enabled="$(uci -q get wifi-surveyor.main.push_enabled || echo 0)"
+[ "$push_enabled" = "1" ] || exit 0
+
+push_target="$(uci -q get wifi-surveyor.main.push_target || true)"
+push_token="$(uci -q get wifi-surveyor.main.push_token || true)"
+self_ip="$(uci -q get wifi-surveyor.main.self_ip || true)"
+[ -n "$push_target" ] || exit 0
+[ -n "$push_token" ] || exit 0
+
+if [ -z "$self_ip" ]; then
+	self_ip="$(uci -q get network.lan.ipaddr || true)"
+fi
+if [ -z "$self_ip" ]; then
+	self_ip="$(ip -4 -o addr show br-lan 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+fi
+[ -n "$self_ip" ] || exit 0
+
+json="$(cat "$STATE_FILE" 2>/dev/null || true)"
+[ -n "$json" ] || exit 0
+
+push_ts="$(date +%s)"
+push_sig="$(sha256_hex "$(printf '%s\n%s\n%s\n%s' "$push_token" "$push_ts" "$self_ip" "$json")" || true)"
+[ -n "$push_sig" ] || exit 0
+
+url="${push_target}&token=${push_token}&ip=${self_ip}&ts=${push_ts}&sig=${push_sig}"
+wget -q -T 2 -O /dev/null --post-data="$json" "$url" >/dev/null 2>&1 || true

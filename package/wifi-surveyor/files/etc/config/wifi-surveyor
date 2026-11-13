@@ -1,0 +1,46 @@
+config wifi-surveyor 'main'
+	option enabled '1'
+	option auth_token 'change-me-please'
+	option ssh_user 'root'
+	option ssh_key '/etc/wifi-surveyor/id_ed25519'
+	option ssh_connect_timeout '4'
+	option local_collect '1'
+	option sample_interval '5'
+	option cache_max_age '20'
+	option push_enabled '0'
+	option push_target 'http://10.0.0.1/cgi-bin/wifi-surveyor-api?action=push'
+	option push_token 'change-me-please'
+	option push_sig_required '1'
+	option push_max_skew '60'
+	option self_ip ''
+	option throughput_blob_bytes '20000000'
+
+config ap
+	option name 'gateway'
+	option ip '10.0.0.1'
+	option enabled '1'
+
+config ap
+	option name 'acpro'
+	option ip '10.0.0.11'
+	option enabled '1'
+
+config ap
+	option name 'mr33'
+	option ip '10.0.0.14'
+	option enabled '1'
+
+config ap
+	option name 'ap3935'
+	option ip '10.0.0.18'
+	option enabled '1'
+
+config ap
+	option name 'eap615'
+	option ip '10.0.0.20'
+	option enabled '1'
+
+config ap
+	option name 'craftroom'
+	option ip '10.0.0.21'
+	option enabled '1'

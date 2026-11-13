@@ -1,0 +1,24 @@
+#!/bin/sh
+
+set -eu
+
+if [ $# -ne 1 ]; then
+	echo "usage: $0 '<public-key-line>'" >&2
+	exit 1
+fi
+
+key_line="$1"
+forced='command="/usr/sbin/wifi-surveyor-agent --json",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding '
+entry="$forced$key_line"
+
+mkdir -p /etc/dropbear
+chmod 700 /etc/dropbear
+
+if [ -f /etc/dropbear/authorized_keys ] && grep -Fq "$key_line" /etc/dropbear/authorized_keys; then
+	echo "key already present"
+	exit 0
+fi
+
+printf '%s\n' "$entry" >> /etc/dropbear/authorized_keys
+chmod 600 /etc/dropbear/authorized_keys
+echo "key installed"

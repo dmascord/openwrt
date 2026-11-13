@@ -1,0 +1,355 @@
+#!/bin/sh
+
+set -eu
+
+CFG=wifi-surveyor.main
+
+js_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r//g; s/\n/ /g'
+}
+
+auth_token="$(uci -q get ${CFG}.auth_token || true)"
+auth_token_esc="$(js_escape "$auth_token")"
+
+cat <<EOF
+Content-Type: text/html
+Cache-Control: no-store
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wi-Fi Surveyor Dashboard</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --text: #18212d;
+      --muted: #6a778b;
+      --line: #dde3ec;
+      --ok: #0f9d58;
+      --warn: #d68c00;
+      --bad: #d93025;
+      --chip: #eef3f9;
+      --head: #243447;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.4 "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    }
+    .wrap {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      color: var(--head);
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      color: var(--muted);
+    }
+    .btn {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    .status {
+      margin: 6px 0 14px;
+      color: var(--muted);
+    }
+    .ap-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+    }
+    .card-head {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .title {
+      font-weight: 700;
+      color: var(--head);
+      margin: 0;
+      font-size: 15px;
+    }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .chip {
+      background: var(--chip);
+      color: #2b3c53;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+    }
+    .pill {
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #fff;
+      white-space: nowrap;
+    }
+    .ok { background: var(--ok); }
+    .warn { background: var(--warn); }
+    .bad { background: var(--bad); }
+    .tbl {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .tbl th, .tbl td {
+      text-align: left;
+      padding: 6px 8px;
+      border-bottom: 1px solid #edf1f6;
+      vertical-align: top;
+    }
+    .tbl th {
+      color: #516179;
+      background: #fafbfd;
+      position: sticky;
+      top: 0;
+    }
+    .tbl tr.row-ok td { background: #f2fbf6; }
+    .tbl tr.row-warn td { background: #fff8e9; }
+    .tbl tr.row-bad td { background: #fff1ef; }
+    .empty {
+      color: var(--muted);
+      padding: 12px;
+    }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <h1>Wi-Fi Surveyor Dashboard</h1>
+      <div class="controls">
+        <label for="interval">Refresh</label>
+        <select id="interval">
+          <option value="5">5s</option>
+          <option value="10" selected>10s</option>
+          <option value="20">20s</option>
+          <option value="30">30s</option>
+        </select>
+        <button class="btn" id="refreshBtn">Refresh now</button>
+      </div>
+    </div>
+    <div class="status" id="status">Loading...</div>
+    <div class="ap-grid" id="grid"></div>
+  </div>
+
+  <script>
+    const AUTH_TOKEN = "${auth_token_esc}";
+    const statusEl = document.getElementById("status");
+    const gridEl = document.getElementById("grid");
+    const intervalEl = document.getElementById("interval");
+    const refreshBtn = document.getElementById("refreshBtn");
+    let timer = null;
+
+    function esc(v) {
+      return String(v ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function statusClass(signal, inactiveMs) {
+      if (signal >= -60 && inactiveMs <= 5000) return ["Good", "ok"];
+      if (signal >= -70 && inactiveMs <= 15000) return ["Fair", "warn"];
+      return ["Poor", "bad"];
+    }
+
+    function num(v, d = 0) {
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toFixed(d) : "-";
+    }
+
+    function summarize(apData) {
+      const interfaces = Array.isArray(apData.interfaces) ? apData.interfaces : [];
+      let stations = 0;
+      let poor = 0;
+      let fair = 0;
+      let good = 0;
+      interfaces.forEach((iface) => {
+        const stas = Array.isArray(iface.stations) ? iface.stations : [];
+        if (stas.length) {
+          stas.forEach((s) => {
+            stations += 1;
+            const [, cls] = statusClass(Number(s.signal_dbm), Number(s.inactive_ms));
+            if (cls === "ok") good += 1;
+            else if (cls === "warn") fair += 1;
+            else poor += 1;
+          });
+        } else if (Number.isFinite(Number(iface.stations))) {
+          stations += Number(iface.stations);
+        } else if (Number.isFinite(Number(iface.stations_count))) {
+          stations += Number(iface.stations_count);
+        }
+      });
+      return { stations, good, fair, poor };
+    }
+
+    function renderClientRows(apData) {
+      const interfaces = Array.isArray(apData.interfaces) ? apData.interfaces : [];
+      const rows = [];
+      interfaces.forEach((iface) => {
+        const stas = Array.isArray(iface.stations) ? iface.stations : [];
+        const freq = Number(iface.freq_mhz || 0);
+        const band = freq >= 5000 ? "5 GHz" : (freq >= 2400 ? "2.4 GHz" : "-");
+        if (stas.length) {
+          stas.forEach((s) => {
+            const [label, cls] = statusClass(Number(s.signal_dbm), Number(s.inactive_ms));
+            rows.push(
+              "<tr class='row-" + cls + "'>" +
+                "<td class='mono'>" + esc(s.mac || "-") + "</td>" +
+                "<td>" + esc(iface.ssid || "-") + "</td>" +
+                "<td>" + band + "</td>" +
+                "<td>" + esc(iface.ifname || "-") + "</td>" +
+                "<td>" + num(s.signal_dbm, 0) + " dBm</td>" +
+                "<td>" + num((Number(s.inactive_ms) || 0) / 1000, 1) + " s</td>" +
+                "<td>" + num(s.rx_mbps, 1) + " / " + num(s.tx_mbps, 1) + " Mbps</td>" +
+                "<td><span class='pill " + cls + "'>" + label + "</span></td>" +
+              "</tr>"
+            );
+          });
+          return;
+        }
+        const count = Number.isFinite(Number(iface.stations))
+          ? Number(iface.stations)
+          : Number.isFinite(Number(iface.stations_count))
+            ? Number(iface.stations_count)
+            : 0;
+        if (count > 0) {
+          rows.push(
+            "<tr class='row-warn'>" +
+              "<td class='mono'>-</td>" +
+              "<td>" + esc(iface.ssid || "-") + "</td>" +
+              "<td>" + band + "</td>" +
+              "<td>" + esc(iface.ifname || "-") + "</td>" +
+              "<td>-</td><td>-</td><td>-</td>" +
+              "<td><span class='pill warn'>" + count + " client(s), detail unavailable</span></td>" +
+            "</tr>"
+          );
+        }
+      });
+      if (!rows.length) return "<div class='empty'>No associated clients</div>";
+      return (
+        "<table class='tbl'>" +
+          "<thead><tr><th>Client MAC</th><th>SSID</th><th>Band</th><th>Interface</th><th>Signal</th><th>Inactive</th><th>RX/TX</th><th>Status</th></tr></thead>" +
+          "<tbody>" + rows.join("") + "</tbody>" +
+        "</table>"
+      );
+    }
+
+    function render(data) {
+      const results = Array.isArray(data.results) ? data.results : [];
+      const apCards = results
+        .map((r) => {
+          const apData = r?.data || r?.remote || null;
+          const ip = r?.ip || "-";
+          if (!apData || typeof apData !== "object") {
+            return (
+              "<div class='card'>" +
+                "<div class='card-head'><div><p class='title'>" + esc(ip) + "</p></div><span class='pill bad'>No Data</span></div>" +
+                "<div class='empty'>Collector returned no usable payload.</div>" +
+              "</div>"
+            );
+          }
+          const summary = summarize(apData);
+          const poorBadge = summary.poor > 0 ? "<span class='pill bad'>Poor " + summary.poor + "</span>" : "";
+          const fairBadge = summary.fair > 0 ? "<span class='pill warn'>Fair " + summary.fair + "</span>" : "";
+          const goodBadge = "<span class='pill ok'>Good " + summary.good + "</span>";
+          const host = apData.hostname || ip;
+          const model = apData.model || "-";
+          const up = Number(apData.uptime_s || 0);
+          return (
+            "<div class='card'>" +
+              "<div class='card-head'>" +
+                "<div>" +
+                  "<p class='title'>" + esc(host) + " <span class='mono'>(" + esc(ip) + ")</span></p>" +
+                  "<div class='chips'>" +
+                    "<span class='chip'>" + esc(model) + "</span>" +
+                    "<span class='chip'>Uptime " + num(up / 3600, 1) + "h</span>" +
+                    "<span class='chip'>Clients " + summary.stations + "</span>" +
+                  "</div>" +
+                "</div>" +
+                "<div>" + goodBadge + " " + fairBadge + " " + poorBadge + "</div>" +
+              "</div>" +
+              renderClientRows(apData) +
+            "</div>"
+          );
+        })
+        .join("");
+      gridEl.innerHTML = apCards || "<div class='empty'>No AP data available.</div>";
+    }
+
+    async function refresh() {
+      if (!AUTH_TOKEN) {
+        statusEl.textContent = "Missing auth token in wifi-surveyor config.";
+        return;
+      }
+      const started = Date.now();
+      statusEl.textContent = "Refreshing...";
+      try {
+        const res = await fetch("/cgi-bin/wifi-surveyor-api?action=all&live=1&token=" + encodeURIComponent(AUTH_TOKEN), { cache: "no-store" });
+        const body = await res.json();
+        if (!body || body.ok !== true) {
+          throw new Error((body && body.error) || "API returned error");
+        }
+        render(body);
+        const ms = Date.now() - started;
+        statusEl.textContent = "Updated " + new Date().toLocaleTimeString() + " (" + ms + " ms)";
+      } catch (err) {
+        statusEl.textContent = "Refresh failed: " + err.message;
+      }
+    }
+
+    function restartTimer() {
+      if (timer) clearInterval(timer);
+      const sec = Number(intervalEl.value) || 10;
+      timer = setInterval(refresh, sec * 1000);
+    }
+
+    intervalEl.addEventListener("change", restartTimer);
+    refreshBtn.addEventListener("click", refresh);
+    restartTimer();
+    refresh();
+  </script>
+</body>
+</html>
+EOF

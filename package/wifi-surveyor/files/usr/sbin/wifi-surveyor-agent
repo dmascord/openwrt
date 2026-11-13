@@ -1,0 +1,138 @@
+#!/bin/sh
+
+set -eu
+
+json_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r/\\r/g; s/\n/\\n/g'
+}
+
+collect_stations_json() {
+	local ifn="$1"
+	iw dev "$ifn" station dump 2>/dev/null | awk '
+BEGIN {
+	first=1
+	have=0
+	printf "["
+}
+function emit() {
+	if (!have) return
+	printf "%s{\"mac\":\"%s\",\"signal_dbm\":%s,\"inactive_ms\":%s,\"connected_s\":%s,\"rx_mbps\":%s,\"tx_mbps\":%s}",
+		(first ? "" : ","), mac, signal, inactive, connected, rx, tx
+	first=0
+}
+$1=="Station" {
+	emit()
+	mac=$2
+	gsub(/"/, "", mac)
+	signal="null"
+	inactive="null"
+	connected="null"
+	rx="null"
+	tx="null"
+	have=1
+	next
+}
+$1=="signal:" {
+	signal=$2
+	next
+}
+$1=="inactive" && $2=="time:" {
+	inactive=$3
+	next
+}
+$1=="connected" && $2=="time:" {
+	connected=$3
+	next
+}
+$1=="rx" && $2=="bitrate:" {
+	rx=$3
+	next
+}
+$1=="tx" && $2=="bitrate:" {
+	tx=$3
+	next
+}
+END {
+	emit()
+	printf "]"
+}'
+}
+
+collect_roam_events_json() {
+	logread 2>/dev/null | awk '
+/hostapd/ {
+	if ($0 ~ /AP-STA-CONNECTED/ ||
+	    $0 ~ /AP-STA-DISCONNECTED/ ||
+	    $0 ~ /FT-/ ||
+	    $0 ~ /EAPOL-4WAY-HS-COMPLETED/ ||
+	    $0 ~ /WPA: pairwise key handshake completed/ ||
+	    $0 ~ /nl80211: kernel reports: key addition failed/) {
+		print
+	}
+}' | tail -n 60 | awk '
+BEGIN { first=1; printf "[" }
+{
+	gsub(/\\/,"\\\\")
+	gsub(/"/,"\\\"")
+	gsub(/\r/,"\\r")
+	gsub(/\n/,"\\n")
+	printf "%s\"%s\"", (first ? "" : ","), $0
+	first=0
+}
+END { printf "]" }'
+}
+
+collect_interface_json() {
+	local ifn="$1"
+	local info ssid mac chan txp stacount freq stations
+	info="$(iw dev "$ifn" info 2>/dev/null || true)"
+	ssid="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*ssid[[:space:]]\+//p' | head -n1)"
+	mac="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*addr[[:space:]]\+//p' | head -n1)"
+	chan="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*channel[[:space:]]\+\([0-9]\+\).*$/\1/p' | head -n1)"
+	txp="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*txpower[[:space:]]\+\([0-9.]*\).*/\1/p' | head -n1)"
+	freq="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*channel[[:space:]]\+[0-9]\+[[:space:]]*(\([0-9]\+\).*/\1/p' | head -n1)"
+	stacount="$(iw dev "$ifn" station dump 2>/dev/null | awk '/^Station /{c++} END{print c+0}')"
+	stations="$(collect_stations_json "$ifn")"
+
+	printf '{"ifname":"%s","ssid":"%s","mac":"%s","channel":%s,"freq_mhz":%s,"txpower_dbm":%s,"stations_count":%s,"stations":%s}' \
+		"$(json_escape "$ifn")" \
+		"$(json_escape "$ssid")" \
+		"$(json_escape "$mac")" \
+		"${chan:-0}" \
+		"${freq:-0}" \
+		"${txp:-0}" \
+		"${stacount:-0}" \
+		"${stations:-[]}"
+}
+
+mode="${1:---json}"
+[ "$mode" = "--json" ] || {
+	echo "usage: $0 [--json]" >&2
+	exit 1
+}
+
+hostname="$(uci -q get system.@system[0].hostname || hostname)"
+model="$(cat /tmp/sysinfo/model 2>/dev/null || echo unknown)"
+now="$(date +%s)"
+uptime_s="$(cut -d' ' -f1 /proc/uptime | cut -d. -f1)"
+
+printf '{'
+printf '"timestamp":%s,' "$now"
+printf '"hostname":"%s",' "$(json_escape "$hostname")"
+printf '"model":"%s",' "$(json_escape "$model")"
+printf '"uptime_s":%s,' "${uptime_s:-0}"
+printf '"roam_events":%s,' "$(collect_roam_events_json)"
+printf '"interfaces":['
+
+first=1
+for ifn in $(iw dev 2>/dev/null | awk '/Interface/{print $2}'); do
+	if [ "$first" -eq 0 ]; then
+		printf ','
+	fi
+	collect_interface_json "$ifn"
+	first=0
+done
+
+printf ']'
+printf '}'
+printf '\n'

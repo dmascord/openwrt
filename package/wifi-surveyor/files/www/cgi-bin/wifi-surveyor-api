@@ -1,0 +1,519 @@
+#!/bin/sh
+
+set -eu
+
+CFG=wifi-surveyor.main
+
+json_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r/\\r/g; s/\n/\\n/g'
+}
+
+sha256_hex() {
+	local data="${1:-}"
+	if command -v sha256sum >/dev/null 2>&1; then
+		printf '%s' "$data" | sha256sum | awk '{print $1}'
+	elif command -v openssl >/dev/null 2>&1; then
+		printf '%s' "$data" | openssl dgst -sha256 2>/dev/null | sed 's/^.*= //'
+	else
+		return 1
+	fi
+}
+
+json_string_or_null() {
+	local v="${1:-}"
+	if [ -n "$v" ]; then
+		printf '"%s"' "$(json_escape "$v")"
+	else
+		printf 'null'
+	fi
+}
+
+cleanup_stale_tmp() {
+	# Reap stale per-request temp directories if workers were interrupted.
+	find /tmp -maxdepth 1 -type d -name 'wifi-surveyor-api.*' -mmin +15 -exec rm -rf {} \; 2>/dev/null || true
+	# Reap stale partial peer cache writes.
+	find /tmp/wifi-surveyor/peers -maxdepth 1 -type f -name '*.tmp.*' -mmin +15 -exec rm -f {} \; 2>/dev/null || true
+}
+
+kv_get() {
+	local key="$1"
+	printf '%s' "${QUERY_STRING:-}" | tr '&' '\n' | sed -n "s/^${key}=//p" | head -n1
+}
+
+print_headers() {
+	echo "Content-Type: application/json"
+	echo "Cache-Control: no-store"
+	echo
+}
+
+print_blob_headers() {
+	local size="$1"
+	echo "Content-Type: application/octet-stream"
+	echo "Cache-Control: no-store"
+	echo "Content-Disposition: inline; filename=wifi-surveyor-blob.bin"
+	echo "Content-Length: $size"
+	echo
+}
+
+error_json() {
+	local code="$1"
+	local msg="$2"
+	print_headers
+	printf '{"ok":false,"code":%s,"error":"%s"}\n' "$code" "$(json_escape "$msg")"
+	exit 0
+}
+
+auth_token="$(uci -q get ${CFG}.auth_token || true)"
+provided_token="${HTTP_X_AUTH_TOKEN:-}"
+[ -n "$provided_token" ] || provided_token="$(kv_get token)"
+
+[ -n "$auth_token" ] || error_json 500 "auth token not configured"
+[ "$provided_token" = "$auth_token" ] || error_json 401 "unauthorized"
+
+action="$(kv_get action)"
+[ -n "$action" ] || action="all"
+
+ssh_user="$(uci -q get ${CFG}.ssh_user || echo root)"
+ssh_key="$(uci -q get ${CFG}.ssh_key || echo /etc/wifi-surveyor/id_ed25519)"
+ssh_timeout="$(uci -q get ${CFG}.ssh_connect_timeout || echo 4)"
+local_collect="$(uci -q get ${CFG}.local_collect || echo 1)"
+cache_max_age="$(uci -q get ${CFG}.cache_max_age || echo 20)"
+local_map_max_age="$(uci -q get ${CFG}.local_map_max_age || echo 8)"
+push_sig_required="$(uci -q get ${CFG}.push_sig_required || echo 1)"
+push_max_skew="$(uci -q get ${CFG}.push_max_skew || echo 60)"
+live="$(kv_get live)"
+case "$live" in
+	1|true|yes)
+		live=1
+		;;
+	*)
+		live=0
+		;;
+esac
+
+case "$cache_max_age" in
+	''|*[!0-9]*)
+		cache_max_age=20
+		;;
+esac
+[ "$cache_max_age" -ge 5 ] || cache_max_age=5
+
+case "$local_map_max_age" in
+	''|*[!0-9]*)
+		local_map_max_age=8
+		;;
+esac
+[ "$local_map_max_age" -ge 2 ] || local_map_max_age=2
+
+case "$push_sig_required" in
+	1|true|yes)
+		push_sig_required=1
+		;;
+	*)
+		push_sig_required=0
+		;;
+esac
+
+case "$push_max_skew" in
+	''|*[!0-9]*)
+		push_max_skew=60
+		;;
+esac
+[ "$push_max_skew" -ge 5 ] || push_max_skew=5
+[ "$push_max_skew" -le 600 ] || push_max_skew=600
+
+if [ "$action" = "blob" ]; then
+	blob_bytes="$(kv_get bytes)"
+	case "$blob_bytes" in
+		''|*[!0-9]*)
+			blob_bytes=33554432
+			;;
+	esac
+	[ "$blob_bytes" -ge 1048576 ] || blob_bytes=1048576
+	[ "$blob_bytes" -le 134217728 ] || blob_bytes=134217728
+	print_blob_headers "$blob_bytes"
+	dd if=/dev/zero bs=8192 count=$((blob_bytes / 8192)) 2>/dev/null
+	rem=$((blob_bytes % 8192))
+	[ "$rem" -eq 0 ] || dd if=/dev/zero bs="$rem" count=1 2>/dev/null
+	exit 0
+fi
+
+cache_fresh_file() {
+	local f="$1"
+	local now ts age
+	[ -s "$f" ] || return 1
+	ts="$(sed -n 's/.*"timestamp":\([0-9][0-9]*\).*/\1/p' "$f" | head -n1)"
+	[ -n "$ts" ] || return 1
+	now="$(date +%s)"
+	age=$((now - ts))
+	[ "$age" -ge 0 ] && [ "$age" -le "$cache_max_age" ]
+}
+
+cache_fresh_file_max() {
+	local f="$1"
+	local max_age="$2"
+	local now ts age
+	[ -s "$f" ] || return 1
+	ts="$(sed -n 's/.*"timestamp":\([0-9][0-9]*\).*/\1/p' "$f" | head -n1)"
+	[ -n "$ts" ] || return 1
+	now="$(date +%s)"
+	age=$((now - ts))
+	[ "$age" -ge 0 ] && [ "$age" -le "$max_age" ]
+}
+
+update_bssid_map_from_json() {
+	local ip="$1"
+	local payload="$2"
+	local now bssid
+	now="$(date +%s)"
+	mkdir -p /tmp/wifi-surveyor
+	printf '%s\n' "$payload" | jsonfilter -e '@.interfaces[*].mac' 2>/dev/null | tr ' ' '\n' | while IFS= read -r bssid; do
+		[ -n "$bssid" ] || continue
+		printf '%s %s %s\n' "$(printf '%s' "$bssid" | tr '[:upper:]' '[:lower:]')" "$ip" "$now" >> /tmp/wifi-surveyor/bssid-map.tsv
+	done
+}
+
+lookup_ip_by_bssid() {
+	local bssid="$1"
+	local b
+	sync_local_bssid_map
+	b="$(printf '%s' "$bssid" | tr '[:upper:]' '[:lower:]')"
+	awk -v b="$b" '
+tolower($1)==b {
+	if ($3 >= ts) { ts=$3; ip=$2 }
+}
+END {
+	if (ip != "") print ip
+}' /tmp/wifi-surveyor/bssid-map.tsv 2>/dev/null || true
+}
+
+peer_file_for_ip() {
+	local ip="$1"
+	local safe
+	safe="$(printf '%s' "$ip" | tr -cd '0-9.')"
+	[ -n "$safe" ] || return 1
+	printf '/tmp/wifi-surveyor/peers/%s.json' "$safe"
+}
+
+collect_pushed() {
+	local ip="$1"
+	local live_mode="${2:-0}"
+	local f
+	f="$(peer_file_for_ip "$ip")" || return 1
+	if [ "$live_mode" = "1" ]; then
+		cache_fresh_file_max "$f" 8 || return 1
+	else
+		cache_fresh_file "$f" || return 1
+	fi
+	cat "$f"
+	return 0
+}
+
+collect_ap_by_bssid() {
+	local bssid="$1"
+	local client_ip="${2:-}"
+	local client_mac_in="${3:-}"
+	local live_mode="${4:-0}"
+	local client_mac ip out remote local_bssid local_data
+	client_mac="$(resolve_client_mac "$client_ip" "$client_mac_in")"
+	ip="$(lookup_ip_by_bssid "$bssid")"
+	if [ -z "$ip" ]; then
+		local_bssid="$(printf '%s' "$bssid" | tr '[:upper:]' '[:lower:]')"
+		local_data="$(collect_local)"
+		if printf '%s\n' "$local_data" | jsonfilter -e '@.interfaces[*].mac' 2>/dev/null | tr ' ' '\n' | grep -qi "^$local_bssid$"; then
+			printf '{"ok":true,"ip":"%s","bssid":"%s","client_ip":%s,"client_mac":%s,"via":"local","data":%s}' \
+				"$(json_escape "$(local_router_ip)")" \
+				"$(json_escape "$bssid")" \
+				"$(json_string_or_null "$client_ip")" \
+				"$(json_string_or_null "$client_mac")" \
+				"$local_data"
+			return 0
+		fi
+	fi
+	[ -n "$ip" ] || return 1
+	if out="$(collect_pushed "$ip" "$live_mode" 2>/dev/null)"; then
+		printf '{"ok":true,"ip":"%s","bssid":"%s","client_ip":%s,"client_mac":%s,"via":"push-cache","data":%s}' \
+			"$(json_escape "$ip")" \
+			"$(json_escape "$bssid")" \
+			"$(json_string_or_null "$client_ip")" \
+			"$(json_string_or_null "$client_mac")" \
+			"$out"
+		return 0
+	fi
+	remote="$(collect_remote "$ip" "$live_mode")"
+	printf '{"ok":true,"ip":"%s","bssid":"%s","client_ip":%s,"client_mac":%s,"via":"ssh","remote":%s}' \
+		"$(json_escape "$ip")" \
+		"$(json_escape "$bssid")" \
+		"$(json_string_or_null "$client_ip")" \
+		"$(json_string_or_null "$client_mac")" \
+		"$remote"
+}
+
+mac_from_ip() {
+	local ip="$1"
+	[ -n "$ip" ] || return 0
+	ip neigh show to "$ip" 2>/dev/null | awk '/lladdr/{print tolower($5); exit}'
+}
+
+resolve_client_mac() {
+	local client_ip="${1:-}"
+	local provided="${2:-}"
+	local m via_ip
+	via_ip="$(mac_from_ip "$client_ip")"
+	if [ -n "$via_ip" ]; then
+		printf '%s' "$via_ip"
+		return 0
+	fi
+	m="$(printf '%s' "$provided" | tr '[:upper:]' '[:lower:]')"
+	case "$m" in
+		""|"02:00:00:00:00:00")
+			;;
+		*:*:*:*:*:*)
+			printf '%s' "$m"
+			return 0
+			;;
+	esac
+	m="$(mac_from_ip "$client_ip")"
+	printf '%s' "$m"
+}
+
+local_router_ip() {
+	local ip
+	ip="$(uci -q get network.lan.ipaddr || true)"
+	[ -n "$ip" ] || ip="10.0.0.1"
+	printf '%s' "$ip"
+}
+
+sync_local_bssid_map() {
+	local payload now last age stamp
+	stamp="/tmp/wifi-surveyor/local-map-sync.ts"
+	now="$(date +%s)"
+	if [ -s "$stamp" ]; then
+		last="$(head -n1 "$stamp" 2>/dev/null || true)"
+		case "$last" in
+			''|*[!0-9]*)
+				last=0
+				;;
+		esac
+		age=$((now - last))
+		if [ "$age" -ge 0 ] && [ "$age" -le "$local_map_max_age" ]; then
+			return 0
+		fi
+	fi
+	payload="$(collect_local)"
+	update_bssid_map_from_json "$(local_router_ip)" "$payload"
+	printf '%s\n' "$now" > "$stamp"
+}
+
+collect_local() {
+	local f='/tmp/wifi-surveyor/latest.json'
+	if cache_fresh_file "$f"; then
+		cat "$f"
+		return 0
+	fi
+	/usr/sbin/wifi-surveyor-cache >/dev/null 2>&1 || true
+	if [ -s "$f" ]; then
+		cat "$f"
+		return 0
+	fi
+	/usr/sbin/wifi-surveyor-agent --json 2>/dev/null || echo '{"error":"local collect failed"}'
+}
+
+collect_remote() {
+	local ip="$1"
+	local live_mode="${2:-0}"
+	local out err rc
+	local cached_cmd
+	local remote_cmd
+	if [ "$live_mode" = "1" ]; then
+		remote_cmd="/usr/sbin/wifi-surveyor-agent --json"
+	else
+		remote_cmd="f=/tmp/wifi-surveyor/latest.json; if [ -s \"\$f\" ]; then ts=\$(sed -n 's/.*\"timestamp\":\\([0-9][0-9]*\\).*/\\1/p' \"\$f\" | head -n1); now=\$(date +%s); if [ -n \"\$ts\" ] && [ \$((now-ts)) -le $cache_max_age ]; then cat \"\$f\"; exit 0; fi; fi; /usr/sbin/wifi-surveyor-cache >/dev/null 2>&1 || true; [ -s \"\$f\" ] && cat \"\$f\" || /usr/sbin/wifi-surveyor-agent --json"
+	fi
+	cached_cmd="f=/tmp/wifi-surveyor/latest.json; if [ -s \"\$f\" ]; then ts=\$(sed -n 's/.*\"timestamp\":\\([0-9][0-9]*\\).*/\\1/p' \"\$f\" | head -n1); now=\$(date +%s); if [ -n \"\$ts\" ] && [ \$((now-ts)) -le $cache_max_age ]; then cat \"\$f\"; exit 0; fi; fi; /usr/sbin/wifi-surveyor-cache >/dev/null 2>&1 || true; [ -s \"\$f\" ] && cat \"\$f\" || /usr/sbin/wifi-surveyor-agent --json"
+	if [ -x /usr/bin/dbclient ]; then
+		out="$(/usr/bin/dbclient -y -i "$ssh_key" "$ssh_user@$ip" "$remote_cmd" </dev/null 2>/dev/null)" || rc=$?
+	elif [ -x /usr/bin/ssh ]; then
+		out="$(/usr/bin/ssh -i "$ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/wifi-surveyor/known_hosts -o ConnectTimeout="$ssh_timeout" "$ssh_user@$ip" "$remote_cmd" </dev/null 2>/dev/null)" || rc=$?
+	else
+		out="$(ssh -i "$ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout="$ssh_timeout" "$ssh_user@$ip" "$remote_cmd" </dev/null 2>/dev/null)" || rc=$?
+	fi
+	rc=${rc:-0}
+	if [ "$live_mode" = "1" ] && { [ "$rc" -ne 0 ] || [ -z "$out" ]; }; then
+		rc=0
+		if [ -x /usr/bin/dbclient ]; then
+			out="$(/usr/bin/dbclient -y -i "$ssh_key" "$ssh_user@$ip" "$cached_cmd" </dev/null 2>/dev/null)" || rc=$?
+		elif [ -x /usr/bin/ssh ]; then
+			out="$(/usr/bin/ssh -i "$ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/wifi-surveyor/known_hosts -o ConnectTimeout="$ssh_timeout" "$ssh_user@$ip" "$cached_cmd" </dev/null 2>/dev/null)" || rc=$?
+		else
+			out="$(ssh -i "$ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout="$ssh_timeout" "$ssh_user@$ip" "$cached_cmd" </dev/null 2>/dev/null)" || rc=$?
+		fi
+	fi
+	if [ "$rc" -eq 0 ] && [ -n "$out" ]; then
+		printf '{"ok":true,"ip":"%s","data":%s}' "$(json_escape "$ip")" "$out"
+	else
+		if [ "$rc" -eq 0 ] && [ -z "$out" ]; then
+			err="empty output from remote collector"
+		elif [ -x /usr/bin/dbclient ]; then
+			err="$(/usr/bin/dbclient -y -i "$ssh_key" "$ssh_user@$ip" "$remote_cmd" </dev/null 2>&1 >/dev/null || true)"
+		elif [ -x /usr/bin/ssh ]; then
+			err="$(/usr/bin/ssh -i "$ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/wifi-surveyor/known_hosts -o ConnectTimeout="$ssh_timeout" "$ssh_user@$ip" "$remote_cmd" </dev/null 2>&1 >/dev/null || true)"
+		else
+			err="$(ssh -i "$ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout="$ssh_timeout" "$ssh_user@$ip" "$remote_cmd" </dev/null 2>&1 >/dev/null || true)"
+		fi
+		printf '{"ok":false,"ip":"%s","error":"%s"}' "$(json_escape "$ip")" "$(json_escape "${err:-ssh collect failed}")"
+	fi
+}
+
+print_headers
+
+case "$action" in
+	push)
+		ip="$(kv_get ip)"
+		[ -n "$ip" ] || ip="${REMOTE_ADDR:-}"
+		[ -n "$ip" ] || { printf '{"ok":false,"error":"missing ip"}\n'; exit 0; }
+		payload="$(cat)"
+		push_ts="${HTTP_X_PUSH_TS:-}"
+		[ -n "$push_ts" ] || push_ts="$(kv_get ts)"
+		push_sig="${HTTP_X_PUSH_SIG:-}"
+		[ -n "$push_sig" ] || push_sig="$(kv_get sig)"
+		ts_check="$(printf '%s' "$payload" | sed -n 's/.*"timestamp":\([0-9][0-9]*\).*/\1/p' | head -n1)"
+		[ -n "$ts_check" ] || {
+			printf '{"ok":false,"error":"invalid payload"}\n'
+			exit 0
+		}
+		if [ "$push_sig_required" = "1" ]; then
+			case "$push_ts" in
+				''|*[!0-9]*)
+					printf '{"ok":false,"error":"missing or invalid push timestamp"}\n'
+					exit 0
+					;;
+			esac
+			case "$push_sig" in
+				''|*[!0-9a-fA-F]*)
+					printf '{"ok":false,"error":"missing or invalid push signature"}\n'
+					exit 0
+					;;
+			esac
+			now="$(date +%s)"
+			delta=$((now - push_ts))
+			[ "$delta" -lt 0 ] && delta=$((0 - delta))
+			if [ "$delta" -gt "$push_max_skew" ]; then
+				printf '{"ok":false,"error":"stale push signature"}\n'
+				exit 0
+			fi
+			expect_sig="$(sha256_hex "$(printf '%s\n%s\n%s\n%s' "$auth_token" "$push_ts" "$ip" "$payload")" || true)"
+			[ -n "$expect_sig" ] || {
+				printf '{"ok":false,"error":"signature engine unavailable"}\n'
+				exit 0
+			}
+			push_sig_lc="$(printf '%s' "$push_sig" | tr '[:upper:]' '[:lower:]')"
+			if [ "$push_sig_lc" != "$expect_sig" ]; then
+				printf '{"ok":false,"error":"invalid push signature"}\n'
+				exit 0
+			fi
+		fi
+		f="$(peer_file_for_ip "$ip")" || { printf '{"ok":false,"error":"invalid ip"}\n'; exit 0; }
+		mkdir -p /tmp/wifi-surveyor/peers
+		tmp="${f}.tmp.$$.$(date +%s)"
+		printf '%s\n' "$payload" > "$tmp"
+		mv "$tmp" "$f"
+		update_bssid_map_from_json "$ip" "$payload"
+		printf '{"ok":true,"source":"push","ip":"%s"}\n' "$(json_escape "$ip")"
+		;;
+	roam)
+		bssid="$(kv_get bssid)"
+		[ -n "$bssid" ] || { printf '{"ok":false,"error":"missing bssid"}\n'; exit 0; }
+		client_ip="$(kv_get client_ip)"
+		[ -n "$client_ip" ] || client_ip="${REMOTE_ADDR:-}"
+		client_mac="$(kv_get client_mac)"
+		printf '{"ok":true,"source":"roam","result":%s}\n' "$(collect_ap_by_bssid "$bssid" "$client_ip" "$client_mac" "$live" || printf '{"ok":false,"error":"unknown bssid"}')"
+		;;
+	local)
+		printf '{"ok":true,"source":"local","data":%s}\n' "$(collect_local)"
+		;;
+	ap)
+		ip="$(kv_get ip)"
+		[ -n "$ip" ] || { printf '{"ok":false,"error":"missing ip"}\n'; exit 0; }
+		client_ip="$(kv_get client_ip)"
+		[ -n "$client_ip" ] || client_ip="${REMOTE_ADDR:-}"
+		client_mac_in="$(kv_get client_mac)"
+		client_mac="$(resolve_client_mac "$client_ip" "$client_mac_in")"
+		if out="$(collect_pushed "$ip" "$live" 2>/dev/null)"; then
+			printf '{"ok":true,"source":"ap","result":{"ok":true,"ip":"%s","client_ip":%s,"client_mac":%s,"data":%s,"via":"push-cache"}}\n' \
+				"$(json_escape "$ip")" \
+				"$(json_string_or_null "$client_ip")" \
+				"$(json_string_or_null "$client_mac")" \
+				"$out"
+		else
+			remote="$(collect_remote "$ip" "$live")"
+			if [ -n "$remote" ] && [ "$remote" != "{}" ]; then
+				remote="$(printf '%s' "$remote" | sed "s/^{\"ok\":/{\"ok\":true,\"client_ip\":$(json_string_or_null "$client_ip"),\"client_mac\":$(json_string_or_null "$client_mac"),/")"
+			fi
+			printf '{"ok":true,"source":"ap","result":%s}\n' "$remote"
+		fi
+		;;
+	all)
+		cleanup_stale_tmp
+		tmpdir="$(mktemp -d /tmp/wifi-surveyor-api.XXXXXX 2>/dev/null || true)"
+		[ -n "$tmpdir" ] || tmpdir="/tmp/wifi-surveyor-api.$$.$(date +%s)"
+		mkdir -p "$tmpdir"
+		trap 'rm -rf "$tmpdir" 2>/dev/null || true' EXIT INT TERM
+
+		printf '{"ok":true,'
+		printf '"timestamp":%s,' "$(date +%s)"
+		printf '"results":['
+		first=1
+
+		if [ "$local_collect" = "1" ]; then
+			if [ "$first" -eq 0 ]; then printf ','; fi
+			printf '{"ok":true,"ip":"%s","data":%s}' "$(json_escape "$(local_router_ip)")" "$(collect_local)"
+			first=0
+		fi
+
+		idx=0
+		ridx=0
+		while :; do
+			ip="$(uci -q get wifi-surveyor.@ap[$idx].ip || true)"
+			enabled="$(uci -q get wifi-surveyor.@ap[$idx].enabled || echo 1)"
+			[ -n "$ip" ] || break
+			idx=$((idx + 1))
+			[ "$enabled" = "1" ] || continue
+			[ "$ip" = "10.0.0.1" ] && continue
+			if out="$(collect_pushed "$ip" 2>/dev/null)"; then
+				if [ "$first" -eq 0 ]; then printf ','; fi
+				printf '{"ok":true,"ip":"%s","data":%s,"via":"push-cache"}' "$(json_escape "$ip")" "$out"
+				first=0
+				continue
+			fi
+			ridx=$((ridx + 1))
+			printf '%s|%s\n' "$ridx" "$ip" >> "$tmpdir/order"
+			(collect_remote "$ip" > "$tmpdir/$ridx.json") &
+			printf '%s\n' "$!" >> "$tmpdir/pids"
+		done
+
+		if [ -f "$tmpdir/pids" ]; then
+			while IFS= read -r pid; do
+				wait "$pid" 2>/dev/null || true
+			done < "$tmpdir/pids"
+		fi
+
+		if [ -f "$tmpdir/order" ]; then
+			while IFS='|' read -r n ip; do
+				if [ "$first" -eq 0 ]; then printf ','; fi
+				if [ -s "$tmpdir/$n.json" ]; then
+					cat "$tmpdir/$n.json"
+				else
+					printf '{"ok":false,"ip":"%s","error":"remote collector failed"}' "$(json_escape "$ip")"
+				fi
+				first=0
+			done < "$tmpdir/order"
+		fi
+
+		printf ']}'
+		printf '\n'
+		;;
+	*)
+		printf '{"ok":false,"error":"unknown action"}\n'
+		;;
+esac

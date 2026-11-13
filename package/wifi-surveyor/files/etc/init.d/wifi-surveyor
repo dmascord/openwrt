@@ -1,0 +1,63 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+USE_PROCD=1
+
+service_triggers() {
+	procd_add_reload_trigger wifi-surveyor
+}
+
+start() {
+	local blob blob_bytes cur_bytes
+	[ -x /www/cgi-bin/wifi-surveyor-api ] || return 0
+	chmod 0755 /www/cgi-bin/wifi-surveyor-api
+	[ -f /www/cgi-bin/wifi-surveyor-throughput ] && chmod 0755 /www/cgi-bin/wifi-surveyor-throughput
+	[ -x /usr/sbin/wifi-surveyor-agent ] && chmod 0755 /usr/sbin/wifi-surveyor-agent
+	[ -x /usr/sbin/wifi-surveyor-authorize-key ] && chmod 0755 /usr/sbin/wifi-surveyor-authorize-key
+	[ -x /usr/sbin/wifi-surveyor-cache ] && chmod 0755 /usr/sbin/wifi-surveyor-cache
+
+	config_load wifi-surveyor
+	config_get blob_bytes main throughput_blob_bytes 20000000
+	case "$blob_bytes" in
+		''|*[!0-9]*)
+			blob_bytes=20000000
+			;;
+	esac
+	[ "$blob_bytes" -ge 1000000 ] || blob_bytes=1000000
+	[ "$blob_bytes" -le 50000000 ] || blob_bytes=50000000
+
+	blob='/www/wifi-surveyor-blob.bin'
+	cur_bytes=0
+	[ -f "$blob" ] && cur_bytes="$(wc -c < "$blob" 2>/dev/null || echo 0)"
+	if [ "$cur_bytes" -ne "$blob_bytes" ]; then
+		dd if=/dev/zero of="$blob" bs=1M count=$(( (blob_bytes + 1048575) / 1048576 )) 2>/dev/null
+		[ "$(wc -c < "$blob" 2>/dev/null || echo 0)" -gt "$blob_bytes" ] && truncate -s "$blob_bytes" "$blob" 2>/dev/null || true
+	fi
+}
+
+start_service() {
+	local enabled interval
+	config_load wifi-surveyor
+	config_get enabled main enabled 1
+	config_get interval main sample_interval 5
+
+	[ "$enabled" = "1" ] || return 0
+
+	case "$interval" in
+		''|*[!0-9]*)
+			interval=5
+			;;
+	esac
+	[ "$interval" -ge 2 ] || interval=2
+
+	procd_open_instance
+	procd_set_param command /bin/sh -c "while :; do /usr/sbin/wifi-surveyor-cache; sleep $interval; done"
+	procd_set_param respawn 5 10 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+stop() {
+	return 0
+}
