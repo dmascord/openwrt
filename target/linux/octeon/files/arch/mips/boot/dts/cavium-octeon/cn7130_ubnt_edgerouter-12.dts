@@ -76,7 +76,7 @@
 &pip {
 	interface@0 {
 		ethernet@0 {
-			label = "lan10";
+			label = "lan11";
 			status = "okay";
 			phy-mode = "sgmii";
 			phy-handle = <&phy4>;
@@ -85,7 +85,7 @@
 		};
 
 		ethernet@1 {
-			label = "lan11";
+			label = "lan10";
 			status = "okay";
 			phy-mode = "sgmii";
 			phy-handle = <&phy5>;
