@@ -9,6 +9,7 @@ define Package/wifi-surveyor-agent
   SECTION:=net
   CATEGORY:=Network
   TITLE:=Wi-Fi survey agent
+  PKGARCH:=all
   DEPENDS:=+iw +jsonfilter
 endef
 
@@ -21,6 +22,7 @@ define Package/wifi-surveyor-core
   SECTION:=net
   CATEGORY:=Network
   TITLE:=Wi-Fi survey core API/aggregator
+  PKGARCH:=all
   DEPENDS:=+wifi-surveyor-agent +rpcd +uhttpd +openssh-client +jsonfilter
 endef
 
